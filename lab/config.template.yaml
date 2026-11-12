@@ -49,3 +49,19 @@ plugins:
       gate_claude_subs: true
       claude_clients: ["claude-cli/"]
       providers: ["claude", "codex"]
+
+# Local llama.cpp (Gemma 4 E4B). Catalog context is the model max (128K);
+# Start-LocalModel.ps1 picks a VRAM-safe --ctx-size for the server.
+api-keys:
+  openai-compatibility:
+    - name: "llama-local"
+      base-url: "http://127.0.0.1:18234/v1"
+      keys:
+        - api-key: "local"
+      models:
+        - name: "gemma-4-e4b-it"
+          alias: "gemma-4-e4b-it"
+          display-name: "Gemma 4 E4B (local)"
+          max-context-length: 131072
+          input-modalities: [text]
+          output-modalities: [text]

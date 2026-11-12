@@ -85,23 +85,32 @@ impl Opts {
         let mut out = Opts::default();
         let mut it = args.iter();
         while let Some(arg) = it.next() {
-            let name = arg.strip_prefix("--").ok_or_else(|| format!("unexpected argument: {arg}"))?;
+            let name = arg
+                .strip_prefix("--")
+                .ok_or_else(|| format!("unexpected argument: {arg}"))?;
             if Self::FLAGS.contains(&name) {
                 out.flags.push(name.to_string());
             } else {
                 let value = it.next().ok_or_else(|| format!("--{name} needs a value"))?;
-                out.values.entry(name.to_string()).or_default().push(value.clone());
+                out.values
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(value.clone());
             }
         }
         Ok(out)
     }
 
     fn one(&self, name: &str) -> Option<&str> {
-        self.values.get(name).and_then(|v| v.last()).map(String::as_str)
+        self.values
+            .get(name)
+            .and_then(|v| v.last())
+            .map(String::as_str)
     }
 
     fn required(&self, name: &str) -> Result<&str, String> {
-        self.one(name).ok_or_else(|| format!("--{name} is required"))
+        self.one(name)
+            .ok_or_else(|| format!("--{name} is required"))
     }
 
     fn all(&self, name: &str) -> &[String] {
@@ -130,7 +139,8 @@ fn read_events(data: &Path) -> Result<(Vec<Value>, usize), String> {
     let mut events = Vec::new();
     let mut bad = 0;
     for file in files {
-        let f = fs::File::open(&file).map_err(|e| format!("cannot open {}: {e}", file.display()))?;
+        let f =
+            fs::File::open(&file).map_err(|e| format!("cannot open {}: {e}", file.display()))?;
         for line in BufReader::new(f).lines() {
             let line = line.map_err(|e| format!("cannot read {}: {e}", file.display()))?;
             if line.trim().is_empty() {
@@ -151,13 +161,21 @@ fn joined_rows(events: &[Value]) -> Vec<Value> {
     let picks: BTreeMap<&str, &Value> = events
         .iter()
         .filter(|e| e["t"] == "pick")
-        .filter_map(|e| e["selection_id"].as_str().filter(|s| !s.is_empty()).map(|s| (s, e)))
+        .filter_map(|e| {
+            e["selection_id"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| (s, e))
+        })
         .collect();
     events
         .iter()
         .filter(|e| e["t"] == "usage")
         .map(|u| {
-            let pick = u["selection_id"].as_str().and_then(|s| picks.get(s)).copied();
+            let pick = u["selection_id"]
+                .as_str()
+                .and_then(|s| picks.get(s))
+                .copied();
             let chosen = pick.and_then(|p| {
                 let id = p["chosen"].as_str()?;
                 p["candidates"].as_array()?.iter().find(|c| c["id"] == id)
@@ -201,22 +219,39 @@ fn dataset(opts: &Opts) -> Result<u8, String> {
     let (events, bad) = read_events(&opts.data()?)?;
     let rows = joined_rows(&events);
     let mut out: Box<dyn Write> = match opts.one("out") {
-        Some(path) => Box::new(fs::File::create(path).map_err(|e| format!("cannot create {path}: {e}"))?),
+        Some(path) => {
+            Box::new(fs::File::create(path).map_err(|e| format!("cannot create {path}: {e}"))?)
+        }
         None => Box::new(std::io::stdout().lock()),
     };
     for row in &rows {
         writeln!(out, "{row}").map_err(|e| e.to_string())?;
     }
     let with_pick = rows.iter().filter(|r| !r["pick_reason"].is_null()).count();
-    eprintln!("{} rows ({} joined to a pick, {} unreadable lines skipped)", rows.len(), with_pick, bad);
+    eprintln!(
+        "{} rows ({} joined to a pick, {} unreadable lines skipped)",
+        rows.len(),
+        with_pick,
+        bad
+    );
     Ok(0)
 }
 
 fn compare(opts: &Opts) -> Result<u8, String> {
     let by = opts.required("by")?;
-    let since: f64 = opts.one("since").map(|s| s.parse().map_err(|_| "--since must be a number")).transpose()?.unwrap_or(0.0);
-    let filters: Vec<(&str, &str)> =
-        opts.all("where").iter().map(|w| w.split_once('=').ok_or_else(|| format!("--where expects field=value, got {w}"))).collect::<Result<_, _>>()?;
+    let since: f64 = opts
+        .one("since")
+        .map(|s| s.parse().map_err(|_| "--since must be a number"))
+        .transpose()?
+        .unwrap_or(0.0);
+    let filters: Vec<(&str, &str)> = opts
+        .all("where")
+        .iter()
+        .map(|w| {
+            w.split_once('=')
+                .ok_or_else(|| format!("--where expects field=value, got {w}"))
+        })
+        .collect::<Result<_, _>>()?;
     let (events, _) = read_events(&opts.data()?)?;
     let rows = joined_rows(&events);
     let text = |v: &Value| match v {
@@ -226,13 +261,21 @@ fn compare(opts: &Opts) -> Result<u8, String> {
     };
     let mut groups: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for row in &rows {
-        if row["ts"].as_f64().unwrap_or(0.0) < since || filters.iter().any(|(f, v)| text(&row[*f]) != *v) {
+        if row["ts"].as_f64().unwrap_or(0.0) < since
+            || filters.iter().any(|(f, v)| text(&row[*f]) != *v)
+        {
             continue;
         }
         groups.entry(text(&row[by])).or_default().push(row);
     }
-    let report: Vec<Value> = groups.iter().map(|(key, rows)| stats::summarise(by, key, rows)).collect();
-    println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+    let report: Vec<Value> = groups
+        .iter()
+        .map(|(key, rows)| stats::summarise(by, key, rows))
+        .collect();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+    );
     if report.iter().any(|g| g["n"].as_u64().unwrap_or(0) < 30) {
         eprintln!("note: groups under 30 requests are too small to compare; treat their numbers as anecdotes");
     }
@@ -241,7 +284,8 @@ fn compare(opts: &Opts) -> Result<u8, String> {
 
 fn read_list(path: &Path) -> Result<Vec<Value>, String> {
     match fs::read(path) {
-        Ok(raw) => serde_json::from_slice(&raw).map_err(|e| format!("{} is not a JSON list: {e}", path.display())),
+        Ok(raw) => serde_json::from_slice(&raw)
+            .map_err(|e| format!("{} is not a JSON list: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(format!("cannot read {}: {e}", path.display())),
     }
@@ -250,13 +294,19 @@ fn read_list(path: &Path) -> Result<Vec<Value>, String> {
 fn write_list(path: &Path, list: &[Value]) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
     let raw = serde_json::to_vec_pretty(list).map_err(|e| e.to_string())?;
-    fs::write(&tmp, raw).and_then(|_| fs::rename(&tmp, path)).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    fs::write(&tmp, raw)
+        .and_then(|_| fs::rename(&tmp, path))
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 fn watch(opts: &Opts) -> Result<u8, String> {
     let data = opts.data()?;
     fs::create_dir_all(&data).map_err(|e| e.to_string())?;
-    let mut urls: Vec<String> = if opts.flag("no-default-feeds") { Vec::new() } else { feeds::DEFAULT_FEEDS.iter().map(|s| s.to_string()).collect() };
+    let mut urls: Vec<String> = if opts.flag("no-default-feeds") {
+        Vec::new()
+    } else {
+        feeds::DEFAULT_FEEDS.iter().map(|s| s.to_string()).collect()
+    };
     urls.extend(opts.all("feed").iter().cloned());
     let path = data.join("pending.json");
     let mut pending = read_list(&path)?;
@@ -295,7 +345,13 @@ fn watch(opts: &Opts) -> Result<u8, String> {
     if added > 0 {
         write_list(&path, &pending)?;
     }
-    eprintln!("{} feeds read, {} failed, {} new items; pending file: {}", urls.len() - failed, failed, added, path.display());
+    eprintln!(
+        "{} feeds read, {} failed, {} new items; pending file: {}",
+        urls.len() - failed,
+        failed,
+        added,
+        path.display()
+    );
     if failed == urls.len() && !urls.is_empty() {
         return Err("every feed failed".into());
     }
@@ -309,14 +365,24 @@ fn confirm(opts: &Opts) -> Result<u8, String> {
     if !matches!(provider, "claude" | "codex") {
         return Err("--provider must be claude or codex".into());
     }
-    let grant: u64 = opts.one("grant").map(|s| s.parse().map_err(|_| "--grant must be a whole number")).transpose()?.unwrap_or(1);
+    let grant: u64 = opts
+        .one("grant")
+        .map(|s| s.parse().map_err(|_| "--grant must be a whole number"))
+        .transpose()?
+        .unwrap_or(1);
     let pending_path = data.join("pending.json");
     let mut pending = read_list(&pending_path)?;
-    let item = pending.iter_mut().find(|p| p["id"] == id).ok_or_else(|| format!("no pending item with id {id}"))?;
+    let item = pending
+        .iter_mut()
+        .find(|p| p["id"] == id)
+        .ok_or_else(|| format!("no pending item with id {id}"))?;
     if item["status"] == "confirmed" {
         return Err(format!("{id} is already confirmed"));
     }
-    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs_f64();
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs_f64();
     item["status"] = json!("confirmed");
     let title = item["title"].clone();
     let link = item["link"].clone();
@@ -359,7 +425,18 @@ mod tests {
 
     #[test]
     fn options_parse() {
-        let args: Vec<String> = ["--data", "d", "--where", "a=b", "--where", "c=d", "--clears-usage"].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = [
+            "--data",
+            "d",
+            "--where",
+            "a=b",
+            "--where",
+            "c=d",
+            "--clears-usage",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let o = Opts::parse(&args).unwrap();
         assert_eq!(o.one("data"), Some("d"));
         assert_eq!(o.all("where").len(), 2);

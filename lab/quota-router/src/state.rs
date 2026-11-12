@@ -121,7 +121,9 @@ pub struct Observed {
 
 fn client_allowed(cfg: &Config, user_agent: &str) -> bool {
     let ua = user_agent.to_ascii_lowercase();
-    cfg.claude_clients.iter().any(|p| !p.is_empty() && ua.starts_with(&p.to_ascii_lowercase()))
+    cfg.claude_clients
+        .iter()
+        .any(|p| !p.is_empty() && ua.starts_with(&p.to_ascii_lowercase()))
 }
 
 impl State {
@@ -129,7 +131,9 @@ impl State {
         if session.is_empty() {
             return None;
         }
-        self.sessions.get(session).filter(|b| now - b.last_seen <= cfg.affinity_ttl_secs as f64)
+        self.sessions
+            .get(session)
+            .filter(|b| now - b.last_seen <= cfg.affinity_ttl_secs as f64)
     }
 
     fn view(&self, id: &str) -> AccountView {
@@ -142,7 +146,10 @@ impl State {
                 banked_resets: a.banked_resets,
                 last_used: a.last_used,
             },
-            None => AccountView { id: id.to_string(), ..Default::default() },
+            None => AccountView {
+                id: id.to_string(),
+                ..Default::default()
+            },
         }
     }
 
@@ -172,13 +179,22 @@ impl State {
         let ours = eligible.iter().all(|c| cfg.schedules(&c.provider));
         if (!cfg.route || !ours) && gated == 0 {
             self.deferred += 1;
-            return PickResult { outcome: PickOutcome::Defer, decision: None, bound_before: None, gated };
+            return PickResult {
+                outcome: PickOutcome::Defer,
+                decision: None,
+                bound_before: None,
+                gated,
+            };
         }
 
-        let mut bound = self.live_binding(&input.session, now, cfg).map(|b| b.auth_id.clone());
+        let mut bound = self
+            .live_binding(&input.session, now, cfg)
+            .map(|b| b.auth_id.clone());
         if bound.is_none() {
             // A subagent starts on its parent's account so it shares the parent's cache.
-            bound = self.live_binding(&input.parent_session, now, cfg).map(|b| b.auth_id.clone());
+            bound = self
+                .live_binding(&input.parent_session, now, cfg)
+                .map(|b| b.auth_id.clone());
         }
         let views: Vec<AccountView> = eligible.iter().map(|c| self.view(&c.id)).collect();
         let decision = policy::decide(now, &input.model, &views, bound.as_deref(), cfg);
@@ -189,7 +205,12 @@ impl State {
             (None, Reason::AllBlocked) if gated > 0 => decision.scores[0].id.clone(),
             _ => {
                 self.deferred += 1;
-                return PickResult { outcome: PickOutcome::Defer, decision: Some(decision), bound_before: bound, gated };
+                return PickResult {
+                    outcome: PickOutcome::Defer,
+                    decision: Some(decision),
+                    bound_before: bound,
+                    gated,
+                };
             }
         };
         for c in &eligible {
@@ -200,7 +221,9 @@ impl State {
             }
         }
         if !input.session.is_empty() {
-            let moved = self.live_binding(&input.session, now, cfg).is_some_and(|b| b.auth_id != choice);
+            let moved = self
+                .live_binding(&input.session, now, cfg)
+                .is_some_and(|b| b.auth_id != choice);
             if moved {
                 self.rebinds += 1;
             }
@@ -217,7 +240,12 @@ impl State {
             b.turns += 1;
             self.trim_sessions(now, cfg);
         }
-        PickResult { outcome: PickOutcome::Choose(choice), decision: Some(decision), bound_before: bound, gated }
+        PickResult {
+            outcome: PickOutcome::Choose(choice),
+            decision: Some(decision),
+            bound_before: bound,
+            gated,
+        }
     }
 
     fn trim_sessions(&mut self, now: f64, cfg: &Config) {
@@ -235,10 +263,11 @@ impl State {
             return out;
         }
         // Was this thread warm on this same account before this request?
-        let warm = self
-            .sessions
-            .get(&usage.session)
-            .is_some_and(|b| b.auth_id == usage.auth_id && b.prev_seen > 0.0 && b.last_seen - b.prev_seen <= cfg.cache_ttl_secs as f64);
+        let warm = self.sessions.get(&usage.session).is_some_and(|b| {
+            b.auth_id == usage.auth_id
+                && b.prev_seen > 0.0
+                && b.last_seen - b.prev_seen <= cfg.cache_ttl_secs as f64
+        });
         let a = self.accounts.entry(usage.auth_id.clone()).or_default();
         if a.provider.is_empty() {
             a.provider = usage.provider.clone();
@@ -252,7 +281,11 @@ impl State {
         a.cache_read_tokens += usage.cache_read_tokens;
         a.cache_write_tokens += usage.cache_write_tokens;
         let prompt = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens;
-        if warm && !usage.failed && usage.cache_read_tokens == 0 && prompt >= cfg.cache_miss_min_tokens {
+        if warm
+            && !usage.failed
+            && usage.cache_read_tokens == 0
+            && prompt >= cfg.cache_miss_min_tokens
+        {
             a.cache_misses += 1;
             out.cache_miss = true;
         }
@@ -263,7 +296,9 @@ impl State {
         }
         let budget_of = |ws: &BTreeMap<String, Window>| {
             ws.iter()
-                .filter(|(n, w)| w.hours >= cfg.budget_min_hours && quota::model_scope(n).is_empty())
+                .filter(|(n, w)| {
+                    w.hours >= cfg.budget_min_hours && quota::model_scope(n).is_empty()
+                })
                 .map(|(_, w)| w.clone())
                 .max_by(|x, y| x.hours.total_cmp(&y.hours))
         };
@@ -276,7 +311,11 @@ impl State {
                     let dt = now - t0;
                     if dt >= BURN_MIN_GAP_SECS && n.used >= used0 {
                         let rate = (n.used - used0) / (dt / 3600.0);
-                        a.burn_per_hour = if a.burn_per_hour > 0.0 { (1.0 - BURN_ALPHA) * a.burn_per_hour + BURN_ALPHA * rate } else { rate };
+                        a.burn_per_hour = if a.burn_per_hour > 0.0 {
+                            (1.0 - BURN_ALPHA) * a.burn_per_hour + BURN_ALPHA * rate
+                        } else {
+                            rate
+                        };
                         a.burn_base = Some((now, n.used, n.reset_at));
                     }
                 }
@@ -299,7 +338,10 @@ impl State {
         }
         a.last_observed = now;
         if let Some(n) = after {
-            if a.samples.last().is_none_or(|(t, _)| now - t >= SAMPLE_GAP_SECS) {
+            if a.samples
+                .last()
+                .is_none_or(|(t, _)| now - t >= SAMPLE_GAP_SECS)
+            {
                 a.samples.push((now, n.used));
                 if a.samples.len() > MAX_SAMPLES {
                     a.samples.remove(0);
@@ -312,13 +354,23 @@ impl State {
 
     /// A provider announced a free reset: every account of that provider gains one,
     /// and its recorded usage is cleared because the windows restarted.
-    pub fn apply_announcement(&mut self, provider: &str, at: f64, grant: u32, clears_usage: bool) -> usize {
+    pub fn apply_announcement(
+        &mut self,
+        provider: &str,
+        at: f64,
+        grant: u32,
+        clears_usage: bool,
+    ) -> usize {
         if self.announcements.get(provider).is_some_and(|t| *t >= at) {
             return 0;
         }
         self.announcements.insert(provider.to_string(), at);
         let mut n = 0;
-        for a in self.accounts.values_mut().filter(|a| a.provider.eq_ignore_ascii_case(provider)) {
+        for a in self
+            .accounts
+            .values_mut()
+            .filter(|a| a.provider.eq_ignore_ascii_case(provider))
+        {
             a.free_resets += grant;
             if clears_usage {
                 a.windows.retain(|_, w| w.observed_at > at);
@@ -329,7 +381,9 @@ impl State {
     }
 
     pub fn set_resets(&mut self, auth_id: &str, free: Option<u32>, banked: Option<u32>) -> bool {
-        let Some(a) = self.accounts.get_mut(auth_id) else { return false };
+        let Some(a) = self.accounts.get_mut(auth_id) else {
+            return false;
+        };
         if let Some(v) = free {
             a.free_resets = v;
         }
@@ -346,9 +400,12 @@ impl State {
             let s = policy::score(now, "", &self.view(id), cfg);
             // Actual burn over the last 24h, idle time included.
             let day_ago = now - 86_400.0;
-            let recent: Vec<&(f64, f64)> = a.samples.iter().filter(|(t, _)| *t >= day_ago).collect();
+            let recent: Vec<&(f64, f64)> =
+                a.samples.iter().filter(|(t, _)| *t >= day_ago).collect();
             let actual = match (recent.first(), recent.last()) {
-                (Some(f), Some(l)) if l.0 - f.0 >= 3600.0 && l.1 >= f.1 => (l.1 - f.1) / ((l.0 - f.0) / 3600.0),
+                (Some(f), Some(l)) if l.0 - f.0 >= 3600.0 && l.1 >= f.1 => {
+                    (l.1 - f.1) / ((l.0 - f.0) / 3600.0)
+                }
                 _ => 0.0,
             };
             let projected = (s.budget_used + actual * s.hours_left).min(1.0);
@@ -392,7 +449,11 @@ impl State {
                 }))).collect::<BTreeMap<_, _>>(),
             }));
         }
-        let live = self.sessions.values().filter(|b| now - b.last_seen <= cfg.affinity_ttl_secs as f64).count();
+        let live = self
+            .sessions
+            .values()
+            .filter(|b| now - b.last_seen <= cfg.affinity_ttl_secs as f64)
+            .count();
         json!({
             "generated_at": now,
             "routing": cfg.route,
@@ -412,5 +473,9 @@ fn round(v: f64) -> f64 {
 }
 
 fn ratio(n: f64, d: f64) -> f64 {
-    if d > 0.0 { round(n / d) } else { 0.0 }
+    if d > 0.0 {
+        round(n / d)
+    } else {
+        0.0
+    }
 }

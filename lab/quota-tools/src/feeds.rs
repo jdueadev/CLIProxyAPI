@@ -7,8 +7,11 @@ use std::time::Duration;
 /// Feeds checked on 2026-11-11 to exist and parse. Social posts are not covered:
 /// they have no public feed. Release-note feeds were tried and dropped: changelog
 /// lines about limits matched on every release.
-pub const DEFAULT_FEEDS: &[&str] =
-    &["https://status.claude.com/history.atom", "https://status.openai.com/history.atom", "https://openai.com/news/rss.xml"];
+pub const DEFAULT_FEEDS: &[&str] = &[
+    "https://status.claude.com/history.atom",
+    "https://status.openai.com/history.atom",
+    "https://openai.com/news/rss.xml",
+];
 
 const MAX_FEED_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -29,14 +32,26 @@ pub fn fetch(url: &str) -> Result<String, String> {
         .call()
         .map_err(|e| e.to_string())?;
     let mut body = String::new();
-    response.into_reader().take(MAX_FEED_BYTES).read_to_string(&mut body).map_err(|e| e.to_string())?;
+    response
+        .into_reader()
+        .take(MAX_FEED_BYTES)
+        .read_to_string(&mut body)
+        .map_err(|e| e.to_string())?;
     Ok(body)
 }
 
 fn unescape(text: &str) -> String {
     let text = text.trim();
-    let text = text.strip_prefix("<![CDATA[").and_then(|t| t.strip_suffix("]]>")).unwrap_or(text);
-    text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'").replace("&amp;", "&")
+    let text = text
+        .strip_prefix("<![CDATA[")
+        .and_then(|t| t.strip_suffix("]]>"))
+        .unwrap_or(text);
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// Text of the first `<tag ...>...</tag>` in `block`.
@@ -56,18 +71,28 @@ fn tag_text(block: &str, tag: &str) -> String {
             return String::new();
         }
         let body = &after[gt + 1..];
-        return body.find(&close).map(|end| unescape(&body[..end])).unwrap_or_default();
+        return body
+            .find(&close)
+            .map(|end| unescape(&body[..end]))
+            .unwrap_or_default();
     }
     String::new()
 }
 
 fn attr(block: &str, tag: &str, name: &str) -> String {
     let open = format!("<{tag} ");
-    let Some(start) = block.find(&open) else { return String::new() };
+    let Some(start) = block.find(&open) else {
+        return String::new();
+    };
     let rest = &block[start..];
     let end = rest.find('>').unwrap_or(rest.len());
     let needle = format!("{name}=\"");
-    rest[..end].find(&needle).map(|i| &rest[i + needle.len()..end]).and_then(|v| v.split('"').next()).map(unescape).unwrap_or_default()
+    rest[..end]
+        .find(&needle)
+        .map(|i| &rest[i + needle.len()..end])
+        .and_then(|v| v.split('"').next())
+        .map(unescape)
+        .unwrap_or_default()
 }
 
 fn strip_tags(html: &str) -> String {
@@ -90,11 +115,17 @@ fn strip_tags(html: &str) -> String {
 /// Entries of an Atom (`<entry>`) or RSS (`<item>`) document. Tolerant by design:
 /// a feed that does not parse yields no entries rather than an error.
 pub fn parse(xml: &str) -> Vec<Entry> {
-    let (open, close) = if xml.contains("<entry") { ("<entry", "</entry>") } else { ("<item", "</item>") };
+    let (open, close) = if xml.contains("<entry") {
+        ("<entry", "</entry>")
+    } else {
+        ("<item", "</item>")
+    };
     let mut out = Vec::new();
     let mut rest = xml;
     while let Some(start) = rest.find(open) {
-        let Some(len) = rest[start..].find(close) else { break };
+        let Some(len) = rest[start..].find(close) else {
+            break;
+        };
         let block = &rest[start..start + len];
         let mut link = attr(block, "link", "href");
         if link.is_empty() {
@@ -112,7 +143,12 @@ pub fn parse(xml: &str) -> Vec<Entry> {
                 summary = tag_text(block, tag);
             }
         }
-        out.push(Entry { title: strip_tags(&tag_text(block, "title")), link, published, summary: strip_tags(&unescape(&summary)) });
+        out.push(Entry {
+            title: strip_tags(&tag_text(block, "title")),
+            link,
+            published,
+            summary: strip_tags(&unescape(&summary)),
+        });
         rest = &rest[start + len + close.len()..];
     }
     out
@@ -122,8 +158,20 @@ pub fn parse(xml: &str) -> Vec<Entry> {
 /// limit word and a reset word so ordinary incident posts do not match.
 pub fn looks_like_reset(entry: &Entry) -> bool {
     let text = format!("{} {}", entry.title, entry.summary).to_lowercase();
-    let reset = ["reset", "resetting", "restored usage", "refund", "credited"].iter().any(|w| text.contains(w));
-    let limit = ["usage limit", "rate limit", "weekly limit", "usage cap", "quota", "limits for all", "limits have been"].iter().any(|w| text.contains(w));
+    let reset = ["reset", "resetting", "restored usage", "refund", "credited"]
+        .iter()
+        .any(|w| text.contains(w));
+    let limit = [
+        "usage limit",
+        "rate limit",
+        "weekly limit",
+        "usage cap",
+        "quota",
+        "limits for all",
+        "limits have been",
+    ]
+    .iter()
+    .any(|w| text.contains(w));
     reset && limit
 }
 
@@ -141,7 +189,13 @@ pub fn provider_guess(feed: &str, entry: &Entry) -> &'static str {
 /// Stable short id for an entry: FNV-1a over feed, link and title.
 pub fn entry_id(feed: &str, entry: &Entry) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in feed.bytes().chain([0]).chain(entry.link.bytes()).chain([0]).chain(entry.title.bytes()) {
+    for byte in feed
+        .bytes()
+        .chain([0])
+        .chain(entry.link.bytes())
+        .chain([0])
+        .chain(entry.title.bytes())
+    {
         hash ^= byte as u64;
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
@@ -175,7 +229,10 @@ mod tests {
         assert!(entries[0].summary.contains("reset usage limits"));
         assert!(looks_like_reset(&entries[0]));
         assert!(!looks_like_reset(&entries[1]));
-        assert_eq!(provider_guess("https://status.claude.com/history.atom", &entries[0]), "claude");
+        assert_eq!(
+            provider_guess("https://status.claude.com/history.atom", &entries[0]),
+            "claude"
+        );
     }
 
     #[test]
@@ -186,12 +243,20 @@ mod tests {
         assert_eq!(entries[0].link, "https://example.com/a");
         assert!(looks_like_reset(&entries[0]));
         assert!(!looks_like_reset(&entries[1]));
-        assert_eq!(provider_guess("https://openai.com/news/rss.xml", &entries[0]), "codex");
+        assert_eq!(
+            provider_guess("https://openai.com/news/rss.xml", &entries[0]),
+            "codex"
+        );
     }
 
     #[test]
     fn a_reset_word_alone_is_not_enough() {
-        let e = Entry { title: "Password reset emails delayed".into(), link: String::new(), published: String::new(), summary: String::new() };
+        let e = Entry {
+            title: "Password reset emails delayed".into(),
+            link: String::new(),
+            published: String::new(),
+            summary: String::new(),
+        };
         assert!(!looks_like_reset(&e));
     }
 

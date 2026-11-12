@@ -98,7 +98,9 @@ impl Config {
     }
 
     pub fn schedules(&self, provider: &str) -> bool {
-        self.providers.iter().any(|p| p.eq_ignore_ascii_case(provider))
+        self.providers
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(provider))
     }
 }
 
@@ -115,7 +117,9 @@ mod tests {
 
     #[test]
     fn host_keys_are_ignored_and_overrides_apply() {
-        let cfg = Config::from_yaml(b"enabled: true\npriority: 5\nroute: false\ndrain_target: 0.8\n").unwrap();
+        let cfg =
+            Config::from_yaml(b"enabled: true\npriority: 5\nroute: false\ndrain_target: 0.8\n")
+                .unwrap();
         assert!(!cfg.route);
         assert_eq!(cfg.drain_target, 0.8);
     }

@@ -50,7 +50,9 @@ const CODEX_PREFIX: &str = "x-codex-";
 /// Length in hours encoded in names such as `5h`, `7d`, `7d_sonnet`.
 pub fn hours_from_name(name: &str) -> f64 {
     let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let Ok(n) = digits.parse::<f64>() else { return 0.0 };
+    let Ok(n) = digits.parse::<f64>() else {
+        return 0.0;
+    };
     match name[digits.len()..].chars().next() {
         Some('h') => n,
         Some('d') => n * 24.0,
@@ -68,7 +70,10 @@ pub fn model_scope(name: &str) -> &str {
 
 pub fn applies_to_model(name: &str, model: &str) -> bool {
     let scope = model_scope(name);
-    scope.is_empty() || model.to_ascii_lowercase().contains(&scope.to_ascii_lowercase())
+    scope.is_empty()
+        || model
+            .to_ascii_lowercase()
+            .contains(&scope.to_ascii_lowercase())
 }
 
 fn fraction(raw: &str, percent: bool) -> Option<f64> {
@@ -84,7 +89,12 @@ fn fraction(raw: &str, percent: bool) -> Option<f64> {
 /// Parses every quota window found in `headers` (lower-cased names).
 pub fn parse_windows(headers: &BTreeMap<String, String>, now: f64) -> BTreeMap<String, Window> {
     fn slot<'a>(out: &'a mut BTreeMap<String, Window>, name: &str, now: f64) -> &'a mut Window {
-        out.entry(name.to_string()).or_insert(Window { used: f64::NAN, reset_at: 0.0, hours: 0.0, observed_at: now })
+        out.entry(name.to_string()).or_insert(Window {
+            used: f64::NAN,
+            reset_at: 0.0,
+            hours: 0.0,
+            observed_at: now,
+        })
     }
     let number = |raw: &str| raw.trim().parse::<f64>().ok().filter(|v| v.is_finite());
     let mut out: BTreeMap<String, Window> = BTreeMap::new();
@@ -137,7 +147,10 @@ mod tests {
     use super::*;
 
     fn h(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -154,7 +167,15 @@ mod tests {
             1000.0,
         );
         assert_eq!(w.len(), 2);
-        assert_eq!(w["5h"], Window { used: 0.42, reset_at: 2000.0, hours: 5.0, observed_at: 1000.0 });
+        assert_eq!(
+            w["5h"],
+            Window {
+                used: 0.42,
+                reset_at: 2000.0,
+                hours: 5.0,
+                observed_at: 1000.0
+            }
+        );
         assert_eq!(w["7d"].hours, 168.0);
         assert_eq!(w["7d"].used, 0.79);
     }
@@ -173,7 +194,15 @@ mod tests {
             ]),
             100.0,
         );
-        assert_eq!(w["primary"], Window { used: 0.17, reset_at: 700.0, hours: 5.0, observed_at: 100.0 });
+        assert_eq!(
+            w["primary"],
+            Window {
+                used: 0.17,
+                reset_at: 700.0,
+                hours: 5.0,
+                observed_at: 100.0
+            }
+        );
         assert_eq!(w["secondary"].hours, 168.0);
         assert_eq!(w["secondary"].reset_at, 777.0);
         assert!((w["secondary"].used - 0.555).abs() < 1e-9);
@@ -187,13 +216,21 @@ mod tests {
 
     #[test]
     fn percentage_sent_as_claude_fraction_is_normalised() {
-        let w = parse_windows(&h(&[("anthropic-ratelimit-unified-7d-utilization", "58")]), 0.0);
+        let w = parse_windows(
+            &h(&[("anthropic-ratelimit-unified-7d-utilization", "58")]),
+            0.0,
+        );
         assert_eq!(w["7d"].used, 0.58);
     }
 
     #[test]
     fn reset_passed_means_empty() {
-        let w = Window { used: 0.9, reset_at: 100.0, hours: 5.0, observed_at: 0.0 };
+        let w = Window {
+            used: 0.9,
+            reset_at: 100.0,
+            hours: 5.0,
+            observed_at: 0.0,
+        };
         assert_eq!(w.used_now(50.0), 0.9);
         assert_eq!(w.used_now(100.0), 0.0);
         assert_eq!(w.hours_left(50.0, 1.0), 50.0 / 3600.0);

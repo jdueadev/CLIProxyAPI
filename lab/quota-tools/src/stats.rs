@@ -22,12 +22,22 @@ pub fn summarise(by: &str, key: &str, rows: &[&Value]) -> Value {
     let ok: Vec<&&Value> = rows.iter().filter(|r| r["failed"] != true).collect();
     let latency: Vec<f64> = ok.iter().map(|r| num(r, "latency_ms")).collect();
     // TTFT is only reported for streamed requests.
-    let ttft: Vec<f64> = ok.iter().map(|r| num(r, "ttft_ms")).filter(|v| *v > 0.0).collect();
+    let ttft: Vec<f64> = ok
+        .iter()
+        .map(|r| num(r, "ttft_ms"))
+        .filter(|v| *v > 0.0)
+        .collect();
     let sum = |field: &str| ok.iter().map(|r| num(r, field)).sum::<f64>();
     let prompt = sum("input_tokens") + sum("cache_read_tokens") + sum("cache_write_tokens");
     let output = sum("output_tokens");
     let seconds = latency.iter().sum::<f64>() / 1000.0;
-    let share = |a: f64, b: f64| if b > 0.0 { (a / b * 10_000.0).round() / 10_000.0 } else { 0.0 };
+    let share = |a: f64, b: f64| {
+        if b > 0.0 {
+            (a / b * 10_000.0).round() / 10_000.0
+        } else {
+            0.0
+        }
+    };
     json!({
         by: key,
         "n": n,

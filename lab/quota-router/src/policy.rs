@@ -106,7 +106,11 @@ pub fn score(now: f64, model: &str, acct: &AccountView, cfg: &Config) -> Score {
     };
     let need = (cfg.drain_target - budget_used).max(0.0);
     let required_burn = need / hours_left.max(MIN_HOURS);
-    let sustainable = if acct.burn_per_hour > 0.0 { acct.burn_per_hour } else { cfg.assumed_burn_per_hour };
+    let sustainable = if acct.burn_per_hour > 0.0 {
+        acct.burn_per_hour
+    } else {
+        cfg.assumed_burn_per_hour
+    };
     let tier = if any_full {
         Tier::Blocked
     } else if rate_used >= cfg.rate_soft {
@@ -137,19 +141,41 @@ pub fn score(now: f64, model: &str, acct: &AccountView, cfg: &Config) -> Score {
 /// `candidates` are the accounts the host offers (already filtered for cooldown,
 /// model support and client eligibility). `bound` is the account this thread
 /// last ran on, if its binding is still live.
-pub fn decide(now: f64, model: &str, candidates: &[AccountView], bound: Option<&str>, cfg: &Config) -> Decision {
-    let mut scores: Vec<Score> = candidates.iter().map(|a| score(now, model, a, cfg)).collect();
+pub fn decide(
+    now: f64,
+    model: &str,
+    candidates: &[AccountView],
+    bound: Option<&str>,
+    cfg: &Config,
+) -> Decision {
+    let mut scores: Vec<Score> = candidates
+        .iter()
+        .map(|a| score(now, model, a, cfg))
+        .collect();
     if scores.is_empty() {
-        return Decision { choice: None, reason: Reason::Empty, scores };
+        return Decision {
+            choice: None,
+            reason: Reason::Empty,
+            scores,
+        };
     }
     if let Some(id) = bound {
         if scores.iter().any(|s| s.id == id) {
             // The host only offers accounts that are not cooling down, so staying
             // costs at most one refused request before the host fails over.
-            return Decision { choice: Some(id.to_string()), reason: Reason::Affinity, scores };
+            return Decision {
+                choice: Some(id.to_string()),
+                reason: Reason::Affinity,
+                scores,
+            };
         }
     }
-    let last_used = |id: &str| candidates.iter().find(|a| a.id == id).map_or(0.0, |a| a.last_used);
+    let last_used = |id: &str| {
+        candidates
+            .iter()
+            .find(|a| a.id == id)
+            .map_or(0.0, |a| a.last_used)
+    };
     scores.sort_by(|a, b| {
         a.tier
             .cmp(&b.tier)
@@ -159,9 +185,17 @@ pub fn decide(now: f64, model: &str, candidates: &[AccountView], bound: Option<&
             .then(a.id.cmp(&b.id))
     });
     if scores[0].tier == Tier::Blocked {
-        return Decision { choice: None, reason: Reason::AllBlocked, scores };
+        return Decision {
+            choice: None,
+            reason: Reason::AllBlocked,
+            scores,
+        };
     }
-    Decision { choice: Some(scores[0].id.clone()), reason: Reason::Policy, scores }
+    Decision {
+        choice: Some(scores[0].id.clone()),
+        reason: Reason::Policy,
+        scores,
+    }
 }
 
 #[cfg(test)]
@@ -172,9 +206,29 @@ mod tests {
 
     fn acct(id: &str, weekly_used: f64, weekly_hours_left: f64, five_h_used: f64) -> AccountView {
         let mut windows = BTreeMap::new();
-        windows.insert("7d".into(), Window { used: weekly_used, reset_at: weekly_hours_left * H, hours: 168.0, observed_at: 0.0 });
-        windows.insert("5h".into(), Window { used: five_h_used, reset_at: 2.0 * H, hours: 5.0, observed_at: 0.0 });
-        AccountView { id: id.into(), windows, ..Default::default() }
+        windows.insert(
+            "7d".into(),
+            Window {
+                used: weekly_used,
+                reset_at: weekly_hours_left * H,
+                hours: 168.0,
+                observed_at: 0.0,
+            },
+        );
+        windows.insert(
+            "5h".into(),
+            Window {
+                used: five_h_used,
+                reset_at: 2.0 * H,
+                hours: 5.0,
+                observed_at: 0.0,
+            },
+        );
+        AccountView {
+            id: id.into(),
+            windows,
+            ..Default::default()
+        }
     }
 
     fn pick(cands: &[AccountView], bound: Option<&str>) -> Decision {
@@ -191,7 +245,10 @@ mod tests {
     #[test]
     fn soonest_reset_with_most_unspent_goes_first() {
         // a: 58% used, resets in 24h -> needs 1.33%/h. b: 0% used, resets in 96h -> 0.94%/h.
-        let d = pick(&[acct("b", 0.0, 96.0, 0.0), acct("a", 0.58, 24.0, 0.0)], None);
+        let d = pick(
+            &[acct("b", 0.0, 96.0, 0.0), acct("a", 0.58, 24.0, 0.0)],
+            None,
+        );
         assert_eq!(d.choice.as_deref(), Some("a"));
         assert_eq!(d.reason, Reason::Policy);
         assert_eq!(d.scores[0].tier, Tier::AtRisk);
@@ -199,7 +256,13 @@ mod tests {
 
     #[test]
     fn drained_account_goes_last() {
-        let d = pick(&[acct("drained", 0.95, 10.0, 0.0), acct("fresh", 0.10, 150.0, 0.0)], None);
+        let d = pick(
+            &[
+                acct("drained", 0.95, 10.0, 0.0),
+                acct("fresh", 0.10, 150.0, 0.0),
+            ],
+            None,
+        );
         assert_eq!(d.choice.as_deref(), Some("fresh"));
     }
 
@@ -229,7 +292,13 @@ mod tests {
 
     #[test]
     fn bound_thread_stays_even_when_another_account_is_at_risk() {
-        let d = pick(&[acct("home", 0.95, 100.0, 0.5), acct("risky", 0.30, 12.0, 0.0)], Some("home"));
+        let d = pick(
+            &[
+                acct("home", 0.95, 100.0, 0.5),
+                acct("risky", 0.30, 12.0, 0.0),
+            ],
+            Some("home"),
+        );
         assert_eq!(d.choice.as_deref(), Some("home"));
         assert_eq!(d.reason, Reason::Affinity);
     }
@@ -243,14 +312,23 @@ mod tests {
 
     #[test]
     fn full_five_hour_window_blocks_new_threads() {
-        let d = pick(&[acct("full5h", 0.30, 12.0, 0.99), acct("ok", 0.20, 160.0, 0.1)], None);
+        let d = pick(
+            &[
+                acct("full5h", 0.30, 12.0, 0.99),
+                acct("ok", 0.20, 160.0, 0.1),
+            ],
+            None,
+        );
         assert_eq!(d.choice.as_deref(), Some("ok"));
         assert_eq!(d.scores.last().unwrap().tier, Tier::Blocked);
     }
 
     #[test]
     fn busy_five_hour_window_ranks_behind_open_accounts() {
-        let d = pick(&[acct("busy", 0.30, 12.0, 0.93), acct("ok", 0.20, 160.0, 0.1)], None);
+        let d = pick(
+            &[acct("busy", 0.30, 12.0, 0.93), acct("ok", 0.20, 160.0, 0.1)],
+            None,
+        );
         assert_eq!(d.choice.as_deref(), Some("ok"));
         // With nothing else available it is still used.
         let d = pick(&[acct("busy", 0.30, 12.0, 0.93)], None);
@@ -259,7 +337,10 @@ mod tests {
 
     #[test]
     fn all_blocked_defers_to_host() {
-        let d = pick(&[acct("a", 0.99, 12.0, 0.0), acct("b", 0.2, 12.0, 1.0)], None);
+        let d = pick(
+            &[acct("a", 0.99, 12.0, 0.0), acct("b", 0.2, 12.0, 1.0)],
+            None,
+        );
         assert_eq!(d.reason, Reason::AllBlocked);
         assert!(d.choice.is_none());
     }
@@ -267,7 +348,10 @@ mod tests {
     #[test]
     fn unobserved_account_is_probed_before_a_calm_one() {
         // No headers seen yet: treated as a full, untouched week (0.9/168h = 0.54%/h).
-        let unknown = AccountView { id: "unknown".into(), ..Default::default() };
+        let unknown = AccountView {
+            id: "unknown".into(),
+            ..Default::default()
+        };
         let calm = acct("calm", 0.60, 160.0, 0.0);
         let d = pick(&[calm, unknown], None);
         assert_eq!(d.choice.as_deref(), Some("unknown"));
@@ -286,10 +370,24 @@ mod tests {
     #[test]
     fn model_scoped_window_only_blocks_that_model() {
         let mut a = acct("a", 0.2, 100.0, 0.0);
-        a.windows.insert("7d_opus".into(), Window { used: 1.0, reset_at: 100.0 * H, hours: 168.0, observed_at: 0.0 });
+        a.windows.insert(
+            "7d_opus".into(),
+            Window {
+                used: 1.0,
+                reset_at: 100.0 * H,
+                hours: 168.0,
+                observed_at: 0.0,
+            },
+        );
         let cfg = Config::default();
-        assert_eq!(decide(0.0, "claude-opus-5-5", &[a.clone()], None, &cfg).reason, Reason::AllBlocked);
-        assert_eq!(decide(0.0, "claude-sonnet-5-5", &[a], None, &cfg).reason, Reason::Policy);
+        assert_eq!(
+            decide(0.0, "claude-opus-5-5", &[a.clone()], None, &cfg).reason,
+            Reason::AllBlocked
+        );
+        assert_eq!(
+            decide(0.0, "claude-sonnet-5-5", &[a], None, &cfg).reason,
+            Reason::Policy
+        );
     }
 
     #[test]
@@ -308,7 +406,10 @@ mod tests {
         let mut b = acct("b", 0.2, 160.0, 0.0);
         a.last_used = 50.0;
         b.last_used = 10.0;
-        assert_eq!(pick(&[a.clone(), b.clone()], None).choice.as_deref(), Some("b"));
+        assert_eq!(
+            pick(&[a.clone(), b.clone()], None).choice.as_deref(),
+            Some("b")
+        );
         b.last_used = 50.0;
         assert_eq!(pick(&[b, a], None).choice.as_deref(), Some("a"));
     }

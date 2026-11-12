@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	configaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/config_access"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
@@ -52,7 +53,8 @@ func TestAttachWebsocketRouteDisabledInHomeMode(t *testing.T) {
 					wantStatus := http.StatusNoContent
 					if homeEnabled {
 						wantStatus = http.StatusNotFound
-					} else if wsAuth && token != "test-key" {
+					} else if (wsAuth || configaccess.Sealed()) && token != "test-key" {
+						// A sealed build keeps the key check on this route whatever ws-auth says.
 						wantStatus = http.StatusUnauthorized
 					}
 					if recorder.Code != wantStatus {

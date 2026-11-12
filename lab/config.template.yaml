@@ -1,0 +1,52 @@
+# CLIProxyAPI config for a lab machine. Rendered by D:\scripts\powershell\Install-CliProxy.ps1
+# with `op inject`, so this file holds 1Password references, never secret values.
+# Everything not set here keeps the default documented in config.example.yaml.
+config-version: 8
+
+server:
+  host: "127.0.0.1" # local only; clients on this machine use http://127.0.0.1:8317
+  port: 8317
+
+management:
+  allow-remote: false
+  secret-key: "{{ op://__OP_VAULT__/cliproxy/management-key }}"
+
+access:
+  api-keys:
+    - "{{ op://__OP_VAULT__/cliproxy/client-key }}"
+
+routing:
+  # Fallback only. quota-router answers every pick for the providers it schedules;
+  # this strategy applies to the rest and when the plugin is disabled.
+  strategy: "round-robin"
+  # Off on purpose: a scheduler plugin runs before the built-in affinity selector,
+  # so quota-router keeps thread-to-account bindings itself.
+  session-affinity: false
+
+upstream:
+  claude:
+    header-defaults:
+      # Treat T3 Code as a native Claude Code client.
+      native-entrypoints: ["t3-code"]
+
+oauth:
+  # Login tokens are private data: they live with the vaults, not with the service.
+  auth-dir: "__DATA_DIR__/auths"
+
+observability:
+  usage:
+    usage-statistics-enabled: true
+
+plugins:
+  enabled: true
+  dir: "__SERVICE_DIR__/plugins"
+  configs:
+    quota-router:
+      enabled: true # false restores the built-in scheduler; nothing else changes
+      priority: 10
+      route: true # false keeps monitoring and the client gate but leaves picks to the host
+      data_dir: "__DATA_DIR__/quota-router"
+      drain_target: 0.90
+      gate_claude_subs: true
+      claude_clients: ["claude-cli/"]
+      providers: ["claude", "codex"]

@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["quota-router", "quota-tools"]
+
+[profile.release]
+panic = "unwind"
+lto = "thin"

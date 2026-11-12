@@ -8,6 +8,7 @@ import (
 
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
+	log "github.com/sirupsen/logrus"
 )
 
 // Register ensures the config-access provider is available to the access manager.
@@ -18,15 +19,25 @@ func Register(cfg *sdkconfig.SDKConfig) {
 	}
 
 	fromEnv, envSet := envKeys()
-	keys := normalizeKeys(append(append([]string(nil), cfg.APIKeys...), fromEnv...))
-	if len(keys) == 0 && !envSet {
+	fileKeys := normalizeKeys(cfg.APIKeys)
+	keys := normalizeKeys(append(append([]string(nil), fileKeys...), fromEnv...))
+	if envSet && len(fileKeys) > 0 {
+		// Keys were promised from the environment, so the config file must hold none. A key found there is
+		// a secret on disk that nobody meant to be valid: accept nothing until it is removed.
+		log.Error("access: api-keys is not empty in the config file while " + EnvAPIKeys + " is set; refusing every request until the file's list is emptied")
+		keys = nil
+	}
+	// Upstream unregisters the provider when there are no keys, and no registered provider means every
+	// request is allowed. That open mode remains only when nothing asked for keys: the variable is unset, the
+	// file's list is empty, and the build is not sealed. A sealed build (-tags sealed) never opens, so a
+	// start that bypassed the secret manager leaves the proxy closed.
+	if len(keys) == 0 && !envSet && !sealed {
 		sdkaccess.UnregisterProvider(sdkaccess.AccessProviderTypeConfigAPIKey)
 		return
 	}
-	// With the variable set, the provider stays registered even when it yields no key: no registered
-	// provider means every request is allowed, and a blank or mistyped variable must not open the proxy.
-	// A provider with no keys refuses every request that carries a credential and reports the rest as
-	// having none.
+	if len(keys) == 0 {
+		log.Warn("access: no client keys configured; every request will be refused (set " + EnvAPIKeys + ")")
+	}
 
 	sdkaccess.RegisterProvider(
 		sdkaccess.AccessProviderTypeConfigAPIKey,
@@ -35,8 +46,8 @@ func Register(cfg *sdkconfig.SDKConfig) {
 }
 
 // EnvAPIKeys names an environment variable holding extra client keys, separated by commas.
-// Keys given this way are accepted alongside access.api-keys, are never written to the config file and are
-// not returned by the management API, so a secret manager can supply them at start (for example
+// Keys given this way are never written to the config file and are not returned by the management API. When
+// the variable is set the config file's own list must be empty, so a secret manager can supply them at start (for example
 // "op run --environment <id> -- cli-proxy-api") and the config on disk can hold none.
 const EnvAPIKeys = "CLIPROXY_API_KEYS"
 

@@ -71,10 +71,24 @@ type configReloadSnapshot struct {
 	generation uint64
 }
 
+// EnvManagementKey names an environment variable holding the management key. Unlike MANAGEMENT_PASSWORD it
+// leaves remote-management.allow-remote as the config file sets it, so a secret manager can supply the key at
+// start without opening the management API to other machines.
+const EnvManagementKey = "CLIPROXY_MANAGEMENT_KEY"
+
+// EnvSecret returns the management key given in the environment and whether it forces remote management on.
+// CLIPROXY_MANAGEMENT_KEY wins over MANAGEMENT_PASSWORD and never forces it.
+func EnvSecret() (secret string, remoteOverride bool) {
+	if v := strings.TrimSpace(os.Getenv(EnvManagementKey)); v != "" {
+		return v, false
+	}
+	v := strings.TrimSpace(os.Getenv("MANAGEMENT_PASSWORD"))
+	return v, v != ""
+}
+
 // NewHandler creates a new management handler instance.
 func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Manager) *Handler {
-	envSecret, _ := os.LookupEnv("MANAGEMENT_PASSWORD")
-	envSecret = strings.TrimSpace(envSecret)
+	envSecret, remoteOverride := EnvSecret()
 
 	h := &Handler{
 		cfg:                 cfg.CloneForRuntime(),
@@ -82,7 +96,7 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		failedAttempts:      make(map[string]*attemptInfo),
 		authManager:         manager,
 		tokenStore:          sdkAuth.GetTokenStore(),
-		allowRemoteOverride: envSecret != "",
+		allowRemoteOverride: remoteOverride,
 		envSecret:           envSecret,
 	}
 	h.startAttemptCleanup()

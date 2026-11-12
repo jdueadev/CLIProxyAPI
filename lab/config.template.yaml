@@ -9,11 +9,10 @@ server:
 
 management:
   allow-remote: false
-  secret-key: "{{ op://__OP_VAULT__/cliproxy/management-key }}"
+  secret-key: "" # the management key comes from CLIPROXY_MANAGEMENT_KEY at start; none is kept in this file
 
 access:
-  api-keys:
-    - "{{ op://__OP_VAULT__/cliproxy/client-key }}"
+  api-keys: [] # client keys come from CLIPROXY_API_KEYS at start; none are kept in this file
 
 routing:
   # Fallback only. quota-router answers every pick for the providers it schedules;

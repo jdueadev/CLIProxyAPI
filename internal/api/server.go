@@ -151,9 +151,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		wd = configFilePath
 	}
 
-	envAdminPassword, envAdminPasswordSet := os.LookupEnv("MANAGEMENT_PASSWORD")
-	envAdminPassword = strings.TrimSpace(envAdminPassword)
-	envManagementSecret := envAdminPasswordSet && envAdminPassword != ""
+	envAdminPassword, _ := managementHandlers.EnvSecret()
+	envManagementSecret := envAdminPassword != ""
 
 	// Create server instance
 	s := &Server{

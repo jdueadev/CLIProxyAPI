@@ -3,6 +3,7 @@ package configaccess
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
@@ -16,7 +17,7 @@ func Register(cfg *sdkconfig.SDKConfig) {
 		return
 	}
 
-	keys := normalizeKeys(cfg.APIKeys)
+	keys := normalizeKeys(append(append([]string(nil), cfg.APIKeys...), envKeys()...))
 	if len(keys) == 0 {
 		sdkaccess.UnregisterProvider(sdkaccess.AccessProviderTypeConfigAPIKey)
 		return
@@ -26,6 +27,20 @@ func Register(cfg *sdkconfig.SDKConfig) {
 		sdkaccess.AccessProviderTypeConfigAPIKey,
 		newProvider(sdkaccess.DefaultAccessProviderName, keys),
 	)
+}
+
+// EnvAPIKeys names an environment variable holding extra client keys, separated by commas.
+// Keys given this way are accepted alongside access.api-keys, are never written to the config file and are
+// not returned by the management API, so a secret manager can supply them at start (for example
+// "op run --environment <id> -- cli-proxy-api") and the config on disk can hold none.
+const EnvAPIKeys = "CLIPROXY_API_KEYS"
+
+func envKeys() []string {
+	value, ok := os.LookupEnv(EnvAPIKeys)
+	if !ok {
+		return nil
+	}
+	return strings.Split(value, ",")
 }
 
 type provider struct {

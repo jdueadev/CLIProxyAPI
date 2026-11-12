@@ -66,3 +66,23 @@ func TestEmptyEnvAddsNoKey(t *testing.T) {
 		t.Fatalf("blank key accepted")
 	}
 }
+
+func TestBlankEnvWithNoFileKeysRefusesEverything(t *testing.T) {
+	for _, value := range []string{"", "  ", ",", " , ,"} {
+		t.Setenv(EnvAPIKeys, value)
+		Register(&sdkconfig.SDKConfig{})
+		if len(sdkaccess.RegisteredProviders()) == 0 {
+			t.Fatalf("value %q left no provider registered, which allows every request", value)
+		}
+		for _, key := range []string{"anything", "", " "} {
+			if err := authenticate(t, key); err == nil {
+				t.Fatalf("value %q: key %q accepted", value, key)
+			}
+		}
+		r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		if _, err := sdkaccess.RegisteredProviders()[0].Authenticate(context.Background(), r); err == nil {
+			t.Fatalf("value %q: a request with no credential was accepted", value)
+		}
+		Register(nil)
+	}
+}

@@ -17,11 +17,16 @@ func Register(cfg *sdkconfig.SDKConfig) {
 		return
 	}
 
-	keys := normalizeKeys(append(append([]string(nil), cfg.APIKeys...), envKeys()...))
-	if len(keys) == 0 {
+	fromEnv, envSet := envKeys()
+	keys := normalizeKeys(append(append([]string(nil), cfg.APIKeys...), fromEnv...))
+	if len(keys) == 0 && !envSet {
 		sdkaccess.UnregisterProvider(sdkaccess.AccessProviderTypeConfigAPIKey)
 		return
 	}
+	// With the variable set, the provider stays registered even when it yields no key: no registered
+	// provider means every request is allowed, and a blank or mistyped variable must not open the proxy.
+	// A provider with no keys refuses every request that carries a credential and reports the rest as
+	// having none.
 
 	sdkaccess.RegisterProvider(
 		sdkaccess.AccessProviderTypeConfigAPIKey,
@@ -35,12 +40,14 @@ func Register(cfg *sdkconfig.SDKConfig) {
 // "op run --environment <id> -- cli-proxy-api") and the config on disk can hold none.
 const EnvAPIKeys = "CLIPROXY_API_KEYS"
 
-func envKeys() []string {
+// envKeys returns the keys in the variable and whether the variable is set at all. A key cannot contain a
+// comma, because the comma separates keys.
+func envKeys() ([]string, bool) {
 	value, ok := os.LookupEnv(EnvAPIKeys)
 	if !ok {
-		return nil
+		return nil, false
 	}
-	return strings.Split(value, ",")
+	return strings.Split(value, ","), true
 }
 
 type provider struct {
@@ -72,7 +79,8 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 		return nil, sdkaccess.NewNotHandledError()
 	}
 	if len(p.keys) == 0 {
-		return nil, sdkaccess.NewNotHandledError()
+		// Registered with no keys (see Register): refuse, never pass the request on as unhandled.
+		return nil, sdkaccess.NewInvalidCredentialError()
 	}
 	authHeader := r.Header.Get("Authorization")
 	authHeaderGoogle := r.Header.Get("X-Goog-Api-Key")

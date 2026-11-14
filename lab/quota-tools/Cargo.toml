@@ -1,11 +1,12 @@
 [package]
 name = "quota-tools"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Offline tools over quota-router's event log: training rows, A/B comparison, and the free-reset announcement watcher."
 publish = false
 
 [dependencies]
+quota-router = { path = "../quota-router" }
 serde_json = "1"
 ureq = "2"

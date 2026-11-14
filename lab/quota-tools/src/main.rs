@@ -4,6 +4,8 @@
 //!   compare  group completed requests by a field and compare latency, failures, cache
 //!   watch    scan provider feeds for free-reset announcements (writes pending.json)
 //!   confirm  turn a reviewed pending item into an announcement the router applies
+//!   status   per account and model: ok, near_limit or cooldown, and what the router would pick
+//!   post-resets  send one account's free and banked reset counts to a running router
 //!
 //! Human-readable text goes to stderr; data goes to stdout.
 
@@ -37,7 +39,22 @@ quota-tools <command> [options]
   confirm --data <dir> --id <pending-id> --provider <claude|codex> [--grant <n>] [--clears-usage]
       Appends the reviewed item to <dir>/announcements.json. The router then gives
       every account of that provider <n> free resets (default 1).
+
+  status --data <dir> [--json]
+      Reads <dir>/state.json and prints, as JSON with schema_version, each account
+      (by label, never by identifier) and each model: ok, near_limit or cooldown,
+      the reset time from the upstream, and the account the router would pick now.
+      The same document as GET /v0/management/quota-router/status, computed with
+      this machine's clock from the last saved state (see state_saved_at).
+      Exit code 4 when some model has no account that can serve.
+
+  post-resets --url <proxy base url> --label <acct-...> [--free <n>] [--banked <n>]
+      Sends reset counts for one account to a running router
+      (POST /v0/management/quota-router/resets). The management key is read from
+      the QUOTA_ROUTER_MANAGEMENT_KEY environment variable and never printed.
 ";
+
+const EXIT_EXHAUSTED: u8 = 4;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -57,6 +74,8 @@ fn main() -> ExitCode {
         "compare" => compare(&opts),
         "watch" => watch(&opts),
         "confirm" => confirm(&opts),
+        "status" => status(&opts),
+        "post-resets" => post_resets(&opts),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -79,7 +98,7 @@ struct Opts {
 }
 
 impl Opts {
-    const FLAGS: &'static [&'static str] = &["no-default-feeds", "clears-usage"];
+    const FLAGS: &'static [&'static str] = &["no-default-feeds", "clears-usage", "json"];
 
     fn parse(args: &[String]) -> Result<Self, String> {
         let mut out = Opts::default();
@@ -403,6 +422,88 @@ fn confirm(opts: &Opts) -> Result<u8, String> {
     Ok(0)
 }
 
+fn unix_now() -> Result<f64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .map_err(|e| format!("system clock is before 1970: {e}"))
+}
+
+/// The status document from a saved state file, at `now`.
+fn status_document(data: &Path, now: f64) -> Result<Value, String> {
+    let path = data.join("state.json");
+    let raw = fs::read(&path).map_err(|e| {
+        format!(
+            "cannot read {}: {e}. Point --data at the router's data_dir (the plugin writes state.json there every 30 seconds).",
+            path.display()
+        )
+    })?;
+    let state: quota_router::state::State = serde_json::from_slice(&raw)
+        .map_err(|e| format!("{} is not a quota-router state file: {e}", path.display()))?;
+    let cfg = state.settings.clone().unwrap_or_default();
+    let mut doc = state.status(now, &cfg);
+    doc["source"] = json!("state_file");
+    Ok(doc)
+}
+
+fn status(opts: &Opts) -> Result<u8, String> {
+    let doc = status_document(&opts.data()?, unix_now()?)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?
+    );
+    let exhausted = doc["models"]
+        .as_array()
+        .is_some_and(|m| m.iter().any(|m| m["state"] == "exhausted"));
+    Ok(if exhausted { EXIT_EXHAUSTED } else { 0 })
+}
+
+fn post_resets(opts: &Opts) -> Result<u8, String> {
+    let base = opts.required("url")?.trim_end_matches('/');
+    let label = opts.required("label")?;
+    let count = |name: &str| -> Result<Option<u64>, String> {
+        opts.one(name)
+            .map(|v| {
+                v.parse()
+                    .map_err(|_| format!("--{name} must be a whole number"))
+            })
+            .transpose()
+    };
+    let (free, banked) = (count("free")?, count("banked")?);
+    if free.is_none() && banked.is_none() {
+        return Err("give --free, --banked or both".into());
+    }
+    let key = std::env::var("QUOTA_ROUTER_MANAGEMENT_KEY").map_err(|_| {
+        "QUOTA_ROUTER_MANAGEMENT_KEY is not set; export the proxy's management key (for example with `op run`) and run again".to_string()
+    })?;
+    let mut body = json!({"label": label});
+    if let Some(v) = free {
+        body["free_resets"] = json!(v);
+    }
+    if let Some(v) = banked {
+        body["banked_resets"] = json!(v);
+    }
+    let url = format!("{base}/v0/management/quota-router/resets");
+    let reply = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .post(&url)
+        .set("Authorization", &format!("Bearer {key}"))
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string());
+    match reply {
+        Ok(_) => {
+            eprintln!("posted reset counts for {label}");
+            Ok(0)
+        }
+        Err(ureq::Error::Status(code, r)) => Err(format!(
+            "router answered {code}: {}",
+            r.into_string().unwrap_or_default()
+        )),
+        Err(e) => Err(format!("cannot reach {url}: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +522,46 @@ mod tests {
         assert_eq!(rows[0]["pick_tier"], "at_risk");
         assert_eq!(rows[0]["pick_candidates"], 2);
         assert!(rows[1]["pick_reason"].is_null());
+    }
+
+    #[test]
+    fn status_reads_the_saved_state_by_label() {
+        use quota_router::state::{Candidate, PickInput, State, Usage};
+        let dir = std::env::temp_dir().join(format!("quota-tools-status-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = quota_router::config::Config::default();
+        let mut s = State::default();
+        let input = PickInput {
+            model: "gpt-5.5-codex".into(),
+            user_agent: "codex_cli_rs/0.200.0".into(),
+            candidates: vec![Candidate {
+                id: "secret-account.json".into(),
+                provider: "codex".into(),
+                subscription: true,
+            }],
+            ..Default::default()
+        };
+        s.pick(100.0, &input, &cfg);
+        let refusal = Usage {
+            auth_id: "secret-account.json".into(),
+            provider: "codex".into(),
+            model: "gpt-5.5-codex".into(),
+            failed: true,
+            status: 429,
+            failure_body: r#"{"error":{"type":"usage_limit_reached","resets_at":5000}}"#.into(),
+            ..Default::default()
+        };
+        s.observe(100.0, &refusal, &cfg);
+        s.settings = Some(cfg);
+        fs::write(dir.join("state.json"), serde_json::to_vec(&s).unwrap()).unwrap();
+        let doc = status_document(&dir, 200.0).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(doc["schema_version"], 1);
+        assert_eq!(doc["source"], "state_file");
+        assert_eq!(doc["models"][0]["state"], "exhausted");
+        assert_eq!(doc["models"][0]["earliest_reset_unix"], 5000);
+        assert_eq!(doc["accounts"][0]["state"], "cooldown");
+        assert!(!doc.to_string().contains("secret-account"));
     }
 
     #[test]

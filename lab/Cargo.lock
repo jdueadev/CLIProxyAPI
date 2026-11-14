@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "quota-router"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "serde",
@@ -295,8 +295,9 @@ dependencies = [
 
 [[package]]
 name = "quota-tools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "quota-router",
  "serde_json",
  "ureq",
 ]

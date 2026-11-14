@@ -1,8 +1,8 @@
 //! Plugin configuration, read from `plugins.configs.quota-router` in the host config.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     /// Master switch for routing. When false the plugin only observes and logs;
@@ -13,9 +13,22 @@ pub struct Config {
     pub data_dir: String,
     /// Fraction of a budget window that should be spent by its reset (rule 1).
     pub drain_target: f64,
-    /// An unbound request never starts on an account whose applicable window
-    /// is at or above this fraction.
+    /// No request, bound or new, is sent to an account whose applicable window
+    /// is at or above this fraction: it counts as at its limit.
     pub block_at: f64,
+    /// Pre-emption margin. An account at or above this fraction of any applicable
+    /// window is `near_limit`: it ranks behind every account with room, and a
+    /// thread bound to it moves to an account with room before the limit is hit.
+    pub preempt_at: f64,
+    /// Cooldown applied after an upstream 429 that names no reset time.
+    pub cooldown_default_secs: u64,
+    /// While every account for a model is unavailable the router answers the
+    /// final error itself; once this long has passed since it last asked the
+    /// host for candidates, one request goes through to refresh the pool.
+    pub probe_after_secs: u64,
+    /// Answer "nothing can serve" with one final 429 before the host tries any
+    /// account. When false, the host's own errors reach the client.
+    pub final_error: bool,
     /// Short (rate) windows at or above this fraction push the account behind
     /// every account that still has room.
     pub rate_soft: f64,
@@ -52,6 +65,10 @@ impl Default for Config {
             data_dir: "quota-router".into(),
             drain_target: 0.90,
             block_at: 0.98,
+            preempt_at: 0.95,
+            cooldown_default_secs: 300,
+            probe_after_secs: 600,
+            final_error: true,
             rate_soft: 0.90,
             budget_min_hours: 24.0,
             assumed_burn_per_hour: 0.02,
@@ -88,6 +105,13 @@ impl Config {
         unit("drain_target", self.drain_target)?;
         unit("block_at", self.block_at)?;
         unit("rate_soft", self.rate_soft)?;
+        unit("preempt_at", self.preempt_at)?;
+        if self.preempt_at > self.block_at {
+            return Err(format!(
+                "preempt_at ({}) must not exceed block_at ({}): the router moves threads away before the hard stop",
+                self.preempt_at, self.block_at
+            ));
+        }
         if self.assumed_burn_per_hour <= 0.0 {
             return Err("assumed_burn_per_hour must be positive".into());
         }

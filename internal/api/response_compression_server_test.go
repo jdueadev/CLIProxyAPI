@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	configaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/config_access"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
 	log "github.com/sirupsen/logrus"
@@ -47,6 +48,9 @@ func TestResponseCompressionServerHotReload(t *testing.T) {
 }
 
 func TestWebsocketCompressionServerHotReload(t *testing.T) {
+	if configaccess.Sealed() {
+		t.Skip("starts with no client keys and connects without one: the open mode a sealed build does not have")
+	}
 	cfg := &config.Config{}
 	server := newTestServerWithConfig(t, cfg)
 	httpServer := httptest.NewServer(server.engine)

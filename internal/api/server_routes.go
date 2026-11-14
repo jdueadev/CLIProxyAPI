@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	configaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/config_access"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v8/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
 	claudemodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/claude/models"
@@ -590,7 +591,8 @@ func (s *Server) AttachWebsocketRoute(path string, handler http.Handler) {
 
 	authMiddleware := AuthMiddleware(s.accessManager)
 	conditionalAuth := func(c *gin.Context) {
-		if !s.wsAuthEnabled.Load() {
+		// A sealed build has no open mode, so `ws-auth: false` cannot open this route either.
+		if !s.wsAuthEnabled.Load() && !configaccess.Sealed() {
 			middleware.CaptureAuthenticatedRequestBody(c)
 			if c.IsAborted() {
 				return

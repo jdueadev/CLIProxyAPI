@@ -173,3 +173,6 @@ func normalizeKeys(keys []string) []string {
 	}
 	return normalized
 }
+
+// Sealed reports whether this binary was built with -tags sealed, that is, without any open mode.
+func Sealed() bool { return sealed }

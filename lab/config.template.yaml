@@ -47,7 +47,7 @@ plugins:
       data_dir: "__DATA_DIR__/quota-router"
       drain_target: 0.90
       gate_claude_subs: true
-      claude_clients: ["claude-cli/"]
+      claude_clients: ["claude-cli/", "opencode/"]
       providers: ["claude", "codex"]
 
 # Local llama.cpp (Gemma 4 E4B). Catalog context is the model max (128K);

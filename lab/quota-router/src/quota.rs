@@ -22,9 +22,16 @@ pub struct Window {
 }
 
 impl Window {
-    /// Fraction used right now: a window whose reset has passed is empty.
+    /// Fraction used right now: a window whose reset has passed is empty. A
+    /// window whose reset was not reported has certainly rolled over once a
+    /// whole window length has passed since it was observed.
     pub fn used_now(&self, now: f64) -> f64 {
-        if self.reset_at > 0.0 && now >= self.reset_at {
+        let reset_passed = self.reset_at > 0.0 && now >= self.reset_at;
+        let length_passed = self.reset_at <= 0.0
+            && self.hours > 0.0
+            && self.observed_at > 0.0
+            && now >= self.observed_at + self.hours * 3600.0;
+        if reset_passed || length_passed {
             0.0
         } else {
             self.used.clamp(0.0, 1.0)

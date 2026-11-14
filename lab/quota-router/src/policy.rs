@@ -2,8 +2,13 @@
 //!
 //! Order of concerns for one request:
 //!
+//! 0. An account in cooldown (an upstream refused it) or at `block_at` of any
+//!    applicable window is never chosen. When that leaves nothing, the answer is
+//!    `Exhausted` and the caller returns the final error instead of trying.
 //! 1. A thread stays on the account it started on while that account is offered
-//!    (provider prompt caches are per account).
+//!    and has room (provider prompt caches are per account). A thread on an
+//!    account at `preempt_at` moves to an account with room *before* the limit
+//!    is hit; it stays only when no account has room. Every move is reported.
 //! 2. Otherwise prefer the account most at risk of reaching its reset with more
 //!    than `1 - drain_target` unspent.
 //! 3. Otherwise prefer accounts holding a free reset (spending them first is free).
@@ -26,6 +31,10 @@ pub struct AccountView {
     pub banked_resets: u32,
     /// Unix seconds of the last request routed here. 0 when never.
     pub last_used: f64,
+    /// Unix seconds until which an upstream refusal applies to this model. 0 when none.
+    pub cooldown_until: f64,
+    /// True when `cooldown_until` is the default rather than a reported reset.
+    pub cooldown_estimated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -35,17 +44,35 @@ pub enum Tier {
     FreeReset,
     Normal,
     RateLimited,
+    /// At or above `preempt_at`: used only when no account has room.
+    NearLimit,
+    /// At or above `block_at` of an applicable window: never used.
     Blocked,
+    /// Refused by the upstream until its reset: never used.
+    Cooldown,
+}
+
+/// What a client can expect from an account right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Availability {
+    Ok,
+    NearLimit,
+    /// In cooldown or at its limit: not offered until `available_at`.
+    Cooldown,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Score {
     pub id: String,
     pub tier: Tier,
+    pub availability: Availability,
     /// Budget window fraction used now. Unobserved accounts count as 0.
     pub budget_used: f64,
     /// Highest fraction used across applicable rate windows.
     pub rate_used: f64,
+    /// Highest fraction used across every applicable window.
+    pub limit_used: f64,
     /// Fraction still to spend to reach the drain target.
     pub need: f64,
     pub hours_left: f64,
@@ -54,6 +81,11 @@ pub struct Score {
     pub observed: bool,
     pub free_resets: u32,
     pub banked_resets: u32,
+    /// For an unavailable account, the unix second it becomes usable. For a
+    /// near-limit one, when its full windows reset. 0 when unknown or not limited.
+    pub available_at: f64,
+    /// True when `available_at` rests on an assumed window end or default cooldown.
+    pub available_at_estimated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -63,10 +95,18 @@ pub enum Reason {
     Affinity,
     /// Chosen by quota policy.
     Policy,
-    /// Every candidate is at its limit; the host's scheduler decides.
-    AllBlocked,
+    /// Every candidate is in cooldown or at its limit: nothing is sent upstream.
+    Exhausted,
     /// No candidates were offered.
     Empty,
+}
+
+/// A thread was moved off its account, and why.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AffinityBreak {
+    pub from: String,
+    /// `near_limit`, `at_limit` or `cooldown`.
+    pub reason: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,22 +114,42 @@ pub struct Decision {
     pub choice: Option<String>,
     pub reason: Reason,
     pub scores: Vec<Score>,
+    pub affinity_broken: Option<AffinityBreak>,
 }
 
 const DEFAULT_BUDGET_HOURS: f64 = 168.0;
 const MIN_HOURS: f64 = 0.25;
 
+/// When a window frees up: its reported reset, else the end of its length after
+/// the observation (an estimate), else unknown (0).
+fn window_end(w: &Window) -> (f64, bool) {
+    if w.reset_at > 0.0 {
+        (w.reset_at, false)
+    } else if w.hours > 0.0 && w.observed_at > 0.0 {
+        (w.observed_at + w.hours * 3600.0, true)
+    } else {
+        (0.0, false)
+    }
+}
+
 pub fn score(now: f64, model: &str, acct: &AccountView, cfg: &Config) -> Score {
     let mut budget: Option<&Window> = None;
     let mut rate_used: f64 = 0.0;
-    let mut any_full = false;
+    let mut limit_used: f64 = 0.0;
+    let mut full_until = (0.0_f64, false);
+    let mut near_until = (0.0_f64, false);
     for (name, w) in &acct.windows {
         if !applies_to_model(name, model) {
             continue;
         }
         let used = w.used_now(now);
-        if used >= cfg.block_at {
-            any_full = true;
+        limit_used = limit_used.max(used);
+        let end = window_end(w);
+        if used >= cfg.block_at && end.0 > full_until.0 {
+            full_until = end;
+        }
+        if used >= cfg.preempt_at && end.0 > near_until.0 {
+            near_until = end;
         }
         if w.hours >= cfg.budget_min_hours {
             // With several budget windows, the fullest one is the binding constraint.
@@ -100,6 +160,8 @@ pub fn score(now: f64, model: &str, acct: &AccountView, cfg: &Config) -> Score {
             rate_used = rate_used.max(used);
         }
     }
+    let any_full = limit_used >= cfg.block_at;
+    let cooling = acct.cooldown_until > now;
     let (budget_used, hours_left) = match budget {
         Some(w) => (w.used_now(now), w.hours_left(now, DEFAULT_BUDGET_HOURS)),
         None => (0.0, DEFAULT_BUDGET_HOURS),
@@ -111,8 +173,12 @@ pub fn score(now: f64, model: &str, acct: &AccountView, cfg: &Config) -> Score {
     } else {
         cfg.assumed_burn_per_hour
     };
-    let tier = if any_full {
+    let tier = if cooling {
+        Tier::Cooldown
+    } else if any_full {
         Tier::Blocked
+    } else if limit_used >= cfg.preempt_at {
+        Tier::NearLimit
     } else if rate_used >= cfg.rate_soft {
         Tier::RateLimited
     } else if need > 0.0 && required_burn >= cfg.risk_factor * sustainable {
@@ -122,25 +188,40 @@ pub fn score(now: f64, model: &str, acct: &AccountView, cfg: &Config) -> Score {
     } else {
         Tier::Normal
     };
+    let (availability, (available_at, available_at_estimated)) = match tier {
+        Tier::Cooldown => {
+            // Usable again only when both the refusal and any full window have passed.
+            let c = (acct.cooldown_until, acct.cooldown_estimated);
+            let at = if full_until.0 > c.0 { full_until } else { c };
+            (Availability::Cooldown, at)
+        }
+        Tier::Blocked => (Availability::Cooldown, full_until),
+        Tier::NearLimit => (Availability::NearLimit, near_until),
+        _ => (Availability::Ok, (0.0, false)),
+    };
     Score {
         id: acct.id.clone(),
         tier,
+        availability,
         budget_used,
         rate_used,
+        limit_used,
         need,
         hours_left,
         required_burn,
         observed: budget.is_some(),
         free_resets: acct.free_resets,
         banked_resets: acct.banked_resets,
+        available_at,
+        available_at_estimated,
     }
 }
 
 /// Picks an account for one request.
 ///
-/// `candidates` are the accounts the host offers (already filtered for cooldown,
-/// model support and client eligibility). `bound` is the account this thread
-/// last ran on, if its binding is still live.
+/// `candidates` are the accounts the host offers (already filtered for the
+/// host's own cooldown, model support and client eligibility). `bound` is the
+/// account this thread last ran on, if its binding is still live.
 pub fn decide(
     now: f64,
     model: &str,
@@ -157,17 +238,35 @@ pub fn decide(
             choice: None,
             reason: Reason::Empty,
             scores,
+            affinity_broken: None,
         };
     }
+    let any_room = scores.iter().any(|s| s.availability == Availability::Ok);
+    let mut affinity_broken = None;
     if let Some(id) = bound {
-        if scores.iter().any(|s| s.id == id) {
-            // The host only offers accounts that are not cooling down, so staying
-            // costs at most one refused request before the host fails over.
-            return Decision {
-                choice: Some(id.to_string()),
-                reason: Reason::Affinity,
-                scores,
+        if let Some(b) = scores.iter().find(|s| s.id == id) {
+            let stay = match b.availability {
+                Availability::Ok => true,
+                // Keep the warm cache when moving would not buy any room.
+                Availability::NearLimit => !any_room,
+                Availability::Cooldown => false,
             };
+            if stay {
+                return Decision {
+                    choice: Some(id.to_string()),
+                    reason: Reason::Affinity,
+                    scores,
+                    affinity_broken: None,
+                };
+            }
+            affinity_broken = Some(AffinityBreak {
+                from: id.to_string(),
+                reason: match b.tier {
+                    Tier::Cooldown => "cooldown",
+                    Tier::Blocked => "at_limit",
+                    _ => "near_limit",
+                },
+            });
         }
     }
     let last_used = |id: &str| {
@@ -184,17 +283,19 @@ pub fn decide(
             .then(last_used(&a.id).total_cmp(&last_used(&b.id)))
             .then(a.id.cmp(&b.id))
     });
-    if scores[0].tier == Tier::Blocked {
+    if scores[0].availability == Availability::Cooldown {
         return Decision {
             choice: None,
-            reason: Reason::AllBlocked,
+            reason: Reason::Exhausted,
             scores,
+            affinity_broken,
         };
     }
     Decision {
         choice: Some(scores[0].id.clone()),
         reason: Reason::Policy,
         scores,
+        affinity_broken,
     }
 }
 
@@ -294,7 +395,7 @@ mod tests {
     fn bound_thread_stays_even_when_another_account_is_at_risk() {
         let d = pick(
             &[
-                acct("home", 0.95, 100.0, 0.5),
+                acct("home", 0.90, 100.0, 0.5),
                 acct("risky", 0.30, 12.0, 0.0),
             ],
             Some("home"),
@@ -336,13 +437,63 @@ mod tests {
     }
 
     #[test]
-    fn all_blocked_defers_to_host() {
+    fn all_at_limit_is_exhausted_with_the_earliest_reset() {
         let d = pick(
             &[acct("a", 0.99, 12.0, 0.0), acct("b", 0.2, 12.0, 1.0)],
             None,
         );
-        assert_eq!(d.reason, Reason::AllBlocked);
+        assert_eq!(d.reason, Reason::Exhausted);
         assert!(d.choice.is_none());
+        // b's 5h window resets at 2h, a's week at 12h.
+        let earliest = d
+            .scores
+            .iter()
+            .map(|s| s.available_at)
+            .fold(f64::MAX, f64::min);
+        assert_eq!(earliest, 2.0 * H);
+    }
+
+    #[test]
+    fn near_limit_bound_thread_moves_before_the_limit() {
+        // home is at 96% of its week: not yet refused, but inside the margin.
+        let d = pick(
+            &[
+                acct("home", 0.96, 100.0, 0.1),
+                acct("spare", 0.30, 100.0, 0.1),
+            ],
+            Some("home"),
+        );
+        assert_eq!(d.choice.as_deref(), Some("spare"));
+        assert_eq!(
+            d.affinity_broken,
+            Some(AffinityBreak {
+                from: "home".into(),
+                reason: "near_limit"
+            })
+        );
+        // With no account that has room, the thread keeps its warm cache.
+        let d = pick(&[acct("home", 0.96, 100.0, 0.1)], Some("home"));
+        assert_eq!(
+            (d.choice.as_deref(), d.reason),
+            (Some("home"), Reason::Affinity)
+        );
+    }
+
+    #[test]
+    fn cooldown_is_never_chosen_even_for_a_bound_thread() {
+        let cfg = Config::default();
+        let mut home = acct("home", 0.10, 100.0, 0.1);
+        home.cooldown_until = 500.0;
+        let other = acct("b", 0.5, 100.0, 0.1);
+        let d = decide(100.0, "m", &[home.clone(), other], Some("home"), &cfg);
+        assert_eq!(d.choice.as_deref(), Some("b"));
+        assert_eq!(d.affinity_broken.unwrap().reason, "cooldown");
+        let d = decide(100.0, "m", &[home.clone()], Some("home"), &cfg);
+        assert_eq!(d.reason, Reason::Exhausted);
+        assert_eq!(d.scores[0].available_at, 500.0);
+        // After the cooldown it is offered again.
+        let d = decide(600.0, "m", &[home], Some("home"), &cfg);
+        assert_eq!(d.reason, Reason::Affinity);
     }
 
     #[test]
@@ -382,7 +533,7 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(
             decide(0.0, "claude-opus-5-5", &[a.clone()], None, &cfg).reason,
-            Reason::AllBlocked
+            Reason::Exhausted
         );
         assert_eq!(
             decide(0.0, "claude-sonnet-5-5", &[a], None, &cfg).reason,

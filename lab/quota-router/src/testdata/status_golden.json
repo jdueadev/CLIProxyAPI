@@ -1,0 +1,84 @@
+{
+  "accounts": [
+    {
+      "banked_resets": 0,
+      "cooldown_until": "2026-11-11T01:00:00Z",
+      "free_resets": 0,
+      "label": "acct-2cc1d0bb693b",
+      "provider": "codex",
+      "reason": "upstream_refused",
+      "reset_at": "2026-11-11T01:00:00Z",
+      "reset_at_unix": 1794358800,
+      "reset_estimated": false,
+      "state": "cooldown",
+      "used": 0.0,
+      "windows": []
+    },
+    {
+      "banked_resets": 0,
+      "cooldown_until": null,
+      "free_resets": 0,
+      "label": "acct-a4f96572441a",
+      "provider": "codex",
+      "reason": "near_limit",
+      "reset_at": "2026-11-12T00:00:00Z",
+      "reset_at_unix": 1794441600,
+      "reset_estimated": false,
+      "state": "near_limit",
+      "used": 0.96,
+      "windows": [
+        {
+          "name": "secondary",
+          "reset_at": "2026-11-12T00:00:00Z",
+          "used": 0.96
+        }
+      ]
+    }
+  ],
+  "affinity_breaks": 0,
+  "final_error": true,
+  "generated_at": "2026-11-11T00:01:00Z",
+  "generated_at_unix": 1794355260,
+  "models": [
+    {
+      "accounts": {
+        "cooldown": 1,
+        "near_limit": 1,
+        "ok": 0,
+        "total": 2
+      },
+      "earliest_reset_at": null,
+      "earliest_reset_unix": null,
+      "members": [
+        {
+          "label": "acct-2cc1d0bb693b",
+          "reason": "upstream_refused",
+          "reset_at": "2026-11-11T01:00:00Z",
+          "state": "cooldown",
+          "used": 0.0
+        },
+        {
+          "label": "acct-a4f96572441a",
+          "reason": "near_limit",
+          "reset_at": "2026-11-12T00:00:00Z",
+          "state": "near_limit",
+          "used": 0.96
+        }
+      ],
+      "model": "gpt-5.5-codex",
+      "providers": [
+        "codex"
+      ],
+      "state": "near_limit",
+      "would_pick": "acct-a4f96572441a"
+    }
+  ],
+  "refused": 0,
+  "routing": true,
+  "schema_version": 1,
+  "state_saved_at": "2026-11-10T23:59:50Z",
+  "thresholds": {
+    "block_at": 0.98,
+    "preempt_at": 0.95
+  }
+}

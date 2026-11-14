@@ -46,6 +46,8 @@ plugins:
       route: true # false keeps monitoring and the client gate but leaves picks to the host
       data_dir: "__DATA_DIR__/quota-router"
       drain_target: 0.90
+      preempt_at: 0.95 # move threads off an account at 95% of any window, before its limit
+      final_error: true # one final 429 with the reset time when no account can serve
       gate_claude_subs: true
       claude_clients: ["claude-cli/", "opencode/"]
       providers: ["claude", "codex"]
